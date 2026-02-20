@@ -30,6 +30,7 @@ brews:
       owner: TheFeedFactory
       name: homebrew-tap
       token: "{{ .Env.GITHUB_TOKEN }}"
+    directory: Formula
     name: tff
     homepage: "https://github.com/TheFeedFactory/tff-cli"
     description: "Command-line interface for the FeedFactory API"
