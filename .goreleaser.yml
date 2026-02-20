@@ -1,0 +1,51 @@
+version: 2
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - binary: tff
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+
+archives:
+  - format: tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    format_overrides:
+      - goos: windows
+        format: zip
+
+brews:
+  - repository:
+      owner: TheFeedFactory
+      name: homebrew-tap
+      token: "{{ .Env.GITHUB_TOKEN }}"
+    name: tff
+    homepage: "https://github.com/TheFeedFactory/tff-cli"
+    description: "Command-line interface for the FeedFactory API"
+    license: "MIT"
+    install: |
+      bin.install "tff"
+    test: |
+      system "#{bin}/tff", "--version"
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^ci:"
