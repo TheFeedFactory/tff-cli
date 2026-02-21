@@ -83,6 +83,7 @@ type Categorization struct {
 	CnetID       string           `json:"cnetID"`
 	Name         string           `json:"categorization"`
 	ID           *string          `json:"categorizationId"`
+	EntityType   string           `json:"entityType"`
 	Deprecated   interface{}      `json:"deprecated"`
 	Children     []Categorization `json:"child"`
 	Translations []CatTranslation `json:"categoryTranslations"`
@@ -99,9 +100,9 @@ func printCategory(cat Categorization, depth int) {
 		indent += "  "
 	}
 
-	id := "-"
+	idStr := ""
 	if cat.ID != nil && *cat.ID != "" {
-		id = *cat.ID
+		idStr = fmt.Sprintf(" (ID: %s)", *cat.ID)
 	}
 
 	deprecated := ""
@@ -113,7 +114,7 @@ func printCategory(cat Categorization, depth int) {
 		}
 	}
 
-	fmt.Printf("%s%s  %s (ID: %s)%s\n", indent, cat.CnetID, cat.Name, id, deprecated)
+	fmt.Printf("%s%s  %s%s%s\n", indent, cat.CnetID, cat.Name, idStr, deprecated)
 
 	for _, child := range cat.Children {
 		printCategory(child, depth+1)
@@ -121,8 +122,9 @@ func printCategory(cat Categorization, depth int) {
 }
 
 type DictionaryCategoriesCmd struct {
-	JSON bool `short:"j" help:"Output as JSON."`
+	JSON bool   `short:"j" help:"Output as JSON."`
 	Lang string `name:"lang" default:"nl" help:"Language for category labels (nl, en, de). Default: nl."`
+	Type string `name:"type" short:"t" default:"" help:"Filter by entity type: event, location, route, eventgroup." enum:",event,location,route,eventgroup"`
 }
 
 func (c *DictionaryCategoriesCmd) Run(client *api.Client) error {
@@ -138,10 +140,30 @@ func (c *DictionaryCategoriesCmd) Run(client *api.Client) error {
 		return printRawJSON(data)
 	}
 
-	// Collect all leaf categories (those with a categorizationId)
+	// Map user-friendly type names to ontology entityType values
+	entityTypeMap := map[string]string{
+		"event":      "EVENEMENT",
+		"location":   "LOCATIE",
+		"route":      "ROUTE",
+		"eventgroup": "EVENEMENTGROEP",
+	}
+	filterEntityType := entityTypeMap[c.Type]
+
+	// Filter top-level categorizations by entity type if specified
+	topCats := ontology.Categorizations
+	if filterEntityType != "" {
+		var filtered []Categorization
+		for _, cat := range topCats {
+			if cat.EntityType == filterEntityType {
+				filtered = append(filtered, cat)
+			}
+		}
+		topCats = filtered
+	}
+
+	// Collect all leaf categories
 	type flatCat struct {
 		ID     string `json:"id"`
-		CnetID string `json:"cnetId"`
 		Label  string `json:"label"`
 		Parent string `json:"parent"`
 	}
@@ -158,21 +180,23 @@ func (c *DictionaryCategoriesCmd) Run(client *api.Client) error {
 				}
 			}
 
-			if cat.ID != nil && *cat.ID != "" {
+			if len(cat.Children) > 0 {
+				collect(cat.Children, label)
+			} else if cat.CnetID != "" {
+				// Leaf category: no children, use cnetID as the ID
+				id := cat.CnetID
+				if cat.ID != nil && *cat.ID != "" {
+					id = *cat.ID
+				}
 				categories = append(categories, flatCat{
-					ID:     *cat.ID,
-					CnetID: cat.CnetID,
+					ID:     id,
 					Label:  label,
 					Parent: parent,
 				})
 			}
-
-			if len(cat.Children) > 0 {
-				collect(cat.Children, label)
-			}
 		}
 	}
-	collect(ontology.Categorizations, "")
+	collect(topCats, "")
 
 	if c.JSON {
 		return printJSON(categories)
@@ -184,11 +208,11 @@ func (c *DictionaryCategoriesCmd) Run(client *api.Client) error {
 	}
 
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "ID\tCNET_ID\tLABEL\tPARENT")
-	fmt.Fprintln(w, "--\t-------\t-----\t------")
+	fmt.Fprintln(w, "ID\tLABEL\tPARENT")
+	fmt.Fprintln(w, "--\t-----\t------")
 
 	for _, cat := range categories {
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", cat.ID, cat.CnetID, truncate(cat.Label, 40), truncate(cat.Parent, 30))
+		fmt.Fprintf(w, "%s\t%s\t%s\n", cat.ID, truncate(cat.Label, 40), truncate(cat.Parent, 30))
 	}
 	w.Flush()
 

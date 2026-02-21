@@ -10,7 +10,7 @@ import (
 	"github.com/TheFeedFactory/tff-cli/internal/config"
 )
 
-var version = "0.1.0"
+var version = "0.2.0"
 
 var CLI struct {
 	Config string `short:"c" help:"Path to config file (.env format)." type:"path"`
