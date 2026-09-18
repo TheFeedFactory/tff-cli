@@ -126,3 +126,38 @@ func TestReportsWhatItChangedAndWhy(t *testing.T) {
 		t.Errorf("second change rule = %q, want %q", changes[1].Rule, RuleZipcodeFormat)
 	}
 }
+
+func TestKeepsTheDutchIJDigraphIntact(t *testing.T) {
+	// "IJmuiden" is one letter written as two, and lowercasing the J is a
+	// spelling mistake, not a normalisation. ff-model's own rule gets this
+	// wrong; this package refuses to copy that.
+	for _, tc := range []struct{ in, want string }{
+		{"IJMUIDEN", "IJmuiden"},
+		{"ijmuiden", "IJmuiden"},
+		{"IJSSELSTEIN", "IJsselstein"},
+		{"IJZENDOORN", "IJzendoorn"},
+		{"OOSTERBEEK", "Oosterbeek"},
+		{"NIJMEGEN", "Nijmegen"},
+	} {
+		got, _ := Apply(Address{City: tc.in})
+		if got.City != tc.want {
+			t.Errorf("city %q -> %q, want %q", tc.in, got.City, tc.want)
+		}
+	}
+}
+
+func TestCollapsesWhitespaceThatIsNotASpace(t *testing.T) {
+	// A non-breaking space is what a paste out of a CMS leaves behind, and Go's
+	// \s does not match it.
+	got, changes := Apply(Address{ZipCode: "6862 az", City: "Oosterbeek "})
+
+	if got.ZipCode != "6862 AZ" {
+		t.Errorf("zipcode = %q, want %q", got.ZipCode, "6862 AZ")
+	}
+	if got.City != "Oosterbeek" {
+		t.Errorf("city = %q, want %q", got.City, "Oosterbeek")
+	}
+	if len(changes) == 0 {
+		t.Error("changes = none, want the whitespace to be reported")
+	}
+}

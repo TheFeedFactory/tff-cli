@@ -12,9 +12,9 @@ import (
 	"github.com/TheFeedFactory/tff-cli/internal/normalize"
 )
 
-// pageSize is what one request asks for while walking a selection. The API
-// accepts more, but a smaller page fails sooner and retries cheaper.
-const pageSize = 200
+// normalizePageSize is what one request asks for while walking a selection. The
+// API accepts more, but a smaller page fails sooner and retries cheaper.
+const normalizePageSize = 200
 
 type LocationsNormalizeCmd struct {
 	Markers      string `help:"Comma-separated markers filter. Prefix with '!' to exclude."`
@@ -60,7 +60,14 @@ func (c *LocationsNormalizeCmd) Run(client *api.Client) error {
 		Published: c.Published,
 		UserOrg:   c.UserOrg,
 		Search:    c.Search,
-		Size:      pageSize,
+		Size:      normalizePageSize,
+
+		// A stable order for the walk. The default order is by last
+		// modification, and a feed import bumps that while we are paging, which
+		// silently drops records out of one page and repeats them in another.
+		// Creation date never moves.
+		Sort: "created",
+		Asc:  true,
 	}
 	if c.UpdatedSince != "" {
 		iso, err := ParseRelativeISO(c.UpdatedSince)
@@ -77,7 +84,7 @@ func (c *LocationsNormalizeCmd) Run(client *api.Client) error {
 		FindingCounts: map[string]int{},
 	}
 
-	err := eachLocation(client, opts, c.Limit, func(r api.Resource) {
+	err := eachLocation(client.ListLocations, opts, c.Limit, func(r api.Resource) {
 		report.Inspected++
 		entry := inspectLocation(r)
 
@@ -159,11 +166,20 @@ func inspectLocation(r api.Resource) locationReport {
 }
 
 // isSettled reports whether normalising the already-normalised values changes
-// nothing further.
+// nothing further, for both copies of the address.
 func isSettled(r api.Resource) bool {
-	once, _ := normalize.Apply(addressOf(r.Location))
-	_, again := normalize.Apply(once)
-	return len(again) == 0
+	for _, a := range []normalize.Address{addressOf(r.Location), contactAddress(r.ContactInfo)} {
+		once, _ := normalize.Apply(a)
+		if _, again := normalize.Apply(once); len(again) > 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func contactAddress(ci *api.ContactInfo) normalize.Address {
+	a, _ := contactAddressOf(ci)
+	return a
 }
 
 // needsAPerson reports whether a finding is a hole in the address rather than an
@@ -220,12 +236,17 @@ func coordinatesOf(l *api.Location) (lat, lon string) {
 	return first.YCoordinate, first.XCoordinate
 }
 
+// listPage is one page of a selection. Taking the walk's dependency as a
+// function rather than the client is what lets the paging be tested, which is
+// where the risk in this command actually sits.
+type listPage func(api.ListOptions) (*api.SearchResult, error)
+
 // eachLocation walks the whole selection, page by page, and stops early at limit.
-func eachLocation(client *api.Client, opts api.ListOptions, limit int, visit func(api.Resource)) error {
+func eachLocation(list listPage, opts api.ListOptions, limit int, visit func(api.Resource)) error {
 	seen := 0
 	for page := 0; ; page++ {
 		opts.Page = page
-		result, err := client.ListLocations(opts)
+		result, err := list(opts)
 		if err != nil {
 			return err
 		}
@@ -262,6 +283,12 @@ func describeSelection(c *LocationsNormalizeCmd) string {
 			parts = append(parts, p.name+"="+p.value)
 		}
 	}
+	if c.UpdatedSince != "" {
+		parts = append(parts, "updated-since="+c.UpdatedSince)
+	}
+	if c.Limit > 0 {
+		parts = append(parts, fmt.Sprintf("limit=%d", c.Limit))
+	}
 	if len(parts) == 0 {
 		return "all locations"
 	}
@@ -275,8 +302,8 @@ func printReport(report normalizeReport, details bool) {
 	fmt.Printf("Has findings         %d  (of which %d are missing an address part)\n", report.WithFindings, report.NeedsAPerson)
 	fmt.Printf("Already clean        %d\n", report.Clean)
 
-	printCounts("\nProposed changes, by rule (these are safe to write)", report.ChangesByRule)
-	printCounts("\nFindings, by kind (these need a lookup or a person)", report.FindingCounts)
+	printCounts("\nProposed changes, counted per rewritten value (safe to write)", report.ChangesByRule)
+	printCounts("\nFindings, counted per location (these need a lookup or a person)", report.FindingCounts)
 
 	if len(report.NotIdempotent) > 0 {
 		fmt.Printf("\nWARNING: %d locations do not settle after one pass: %s\n",
@@ -299,7 +326,14 @@ func printCounts(heading string, counts map[string]int) {
 	for k := range counts {
 		keys = append(keys, k)
 	}
-	sort.Slice(keys, func(i, j int) bool { return counts[keys[i]] > counts[keys[j]] })
+	// Count first, then name, so that two runs of the same selection produce
+	// byte-identical reports and a diff between them means something.
+	sort.Slice(keys, func(i, j int) bool {
+		if counts[keys[i]] != counts[keys[j]] {
+			return counts[keys[i]] > counts[keys[j]]
+		}
+		return keys[i] < keys[j]
+	})
 
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 	for _, k := range keys {
@@ -339,7 +373,7 @@ func printAll(locations []locationReport) {
 			fmt.Fprintf(w, "%s\t%s\t\t\t\t%s\n", l.ID, truncate(l.Title, 34), findings)
 			continue
 		}
-		for _, ch := range l.Changes {
+		for _, ch := range collapseByField(l.Changes) {
 			fmt.Fprintf(w, "%s\t%s\t%s\t%q\t%q\t%s\n",
 				l.ID, truncate(l.Title, 34), ch.Field, ch.From, ch.To, findings)
 			findings = ""
@@ -360,32 +394,72 @@ func findingCodes(findings []normalize.Finding) string {
 	return strings.Join(codes, " ")
 }
 
-func writeChangeCSV(path string, locations []locationReport) error {
+// fieldChange is every rule that touched one field, collapsed into the one
+// rewrite a person would actually make. Reporting the intermediate value of a
+// field two rules touched ("41 a" between the trim and the fold) would show a
+// value that appears nowhere in the record and nowhere in the result.
+type fieldChange struct {
+	Field string
+	Rules string
+	From  string
+	To    string
+}
+
+func collapseByField(changes []normalize.Change) []fieldChange {
+	var order []string
+	byField := map[string]*fieldChange{}
+
+	for _, ch := range changes {
+		existing, seen := byField[ch.Field]
+		if !seen {
+			order = append(order, ch.Field)
+			byField[ch.Field] = &fieldChange{Field: ch.Field, Rules: ch.Rule, From: ch.From, To: ch.To}
+			continue
+		}
+		existing.Rules += "+" + ch.Rule
+		existing.To = ch.To
+	}
+
+	collapsed := make([]fieldChange, 0, len(order))
+	for _, field := range order {
+		collapsed = append(collapsed, *byField[field])
+	}
+	return collapsed
+}
+
+func writeChangeCSV(path string, locations []locationReport) (err error) {
 	file, err := os.Create(path)
 	if err != nil {
 		return fmt.Errorf("creating %s: %w", path, err)
 	}
-	defer file.Close()
+	defer func() {
+		// A close error on a file we wrote is a write that did not land, so it
+		// may not be swallowed by a successful return.
+		if closeErr := file.Close(); closeErr != nil && err == nil {
+			err = fmt.Errorf("closing %s: %w", path, closeErr)
+		}
+	}()
 
 	w := csv.NewWriter(file)
-	defer w.Flush()
-
-	if err := w.Write([]string{"id", "title", "field", "rule", "from", "to", "findings"}); err != nil {
+	if err := w.Write([]string{"id", "title", "field", "rules", "from", "to", "findings"}); err != nil {
 		return err
 	}
 	for _, l := range locations {
 		findings := findingCodes(l.Findings)
-		if len(l.Changes) == 0 {
+		changes := collapseByField(l.Changes)
+		if len(changes) == 0 {
 			if err := w.Write([]string{l.ID, l.Title, "", "", "", "", findings}); err != nil {
 				return err
 			}
 			continue
 		}
-		for _, ch := range l.Changes {
-			if err := w.Write([]string{l.ID, l.Title, ch.Field, ch.Rule, ch.From, ch.To, findings}); err != nil {
+		for _, ch := range changes {
+			if err := w.Write([]string{l.ID, l.Title, ch.Field, ch.Rules, ch.From, ch.To, findings}); err != nil {
 				return err
 			}
 		}
 	}
+
+	w.Flush()
 	return w.Error()
 }

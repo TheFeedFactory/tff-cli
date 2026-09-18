@@ -108,3 +108,55 @@ func TestSaysWhichFieldsDisagree(t *testing.T) {
 	}
 	t.Fatalf("no %s finding in %q", FindingCopiesDiffer, findingCodes(got))
 }
+
+func TestDoesNotJudgeAForeignAddressByDutchRules(t *testing.T) {
+	// A Berlin address has no Dutch postcode and no Dutch coordinates, and saying
+	// so every night is noise, not a finding.
+	got := Inspect(Record{
+		Location:  Address{Street: "Unter den Linden", HouseNr: "1", ZipCode: "10117", City: "Berlin", Country: "DE"},
+		Latitude:  "52.5163",
+		Longitude: "13.3777",
+	})
+
+	if codes := findingCodes(got); codes != "" {
+		t.Errorf("codes = %q, want none for a German address", codes)
+	}
+}
+
+func TestStillReportsAForeignAddressThatIsIncomplete(t *testing.T) {
+	got := Inspect(Record{
+		Location: Address{City: "Berlin", Country: "DE"},
+	})
+
+	if !strings.Contains(findingCodes(got), FindingStreetMissing) {
+		t.Errorf("codes = %q, want %s", findingCodes(got), FindingStreetMissing)
+	}
+}
+
+func TestReportsAnIncompleteContactCopyOfItsOwn(t *testing.T) {
+	// The contact copy is a second address, not a shadow of the first: a copy
+	// that carries a street and nothing else is incomplete in its own right.
+	got := Inspect(Record{
+		Location:    Address{Street: "Utrechtseweg", HouseNr: "232", ZipCode: "6862 AZ", City: "Oosterbeek"},
+		ContactInfo: Address{Street: "Utrechtseweg"},
+		HasContact:  true,
+		Latitude:    "51.98768",
+		Longitude:   "5.832752",
+	})
+
+	if !strings.Contains(findingCodes(got), FindingContactIncomplete) {
+		t.Errorf("codes = %q, want %s", findingCodes(got), FindingContactIncomplete)
+	}
+}
+
+func TestSaysNothingAboutAContactCopyThatIsNotThere(t *testing.T) {
+	got := Inspect(Record{
+		Location:  Address{Street: "Utrechtseweg", HouseNr: "232", ZipCode: "6862 AZ", City: "Oosterbeek"},
+		Latitude:  "51.98768",
+		Longitude: "5.832752",
+	})
+
+	if codes := findingCodes(got); codes != "" {
+		t.Errorf("codes = %q, want none", codes)
+	}
+}

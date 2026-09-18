@@ -45,7 +45,9 @@ type Change struct {
 }
 
 var (
-	whitespaceRun = regexp.MustCompile(`\s+`)
+	// Go's \s is ASCII only, and the commonest dirt in a pasted address is a
+	// non-breaking space, so those are named explicitly.
+	whitespaceRun = regexp.MustCompile("[\\s\u00a0\u2007\u202f]+")
 	// A number followed by exactly one letter, however the source spelled the
 	// join. Anything longer is not a suffix, and a second number is a range.
 	houseNrSuffix = regexp.MustCompile(`^(\d+)\s*[-/ ]?\s*([A-Za-z])$`)
@@ -54,6 +56,8 @@ var (
 	// own, which is what keeps "Den Haag" and "Voorst - Empe Noord" intact.
 	singleCaseCity = regexp.MustCompile(`^([a-z\s]+|[A-Z\s]+)$`)
 	wordStart      = regexp.MustCompile(`(^|[\s])([a-z])`)
+	// IJ is one Dutch letter written as two, and it capitalises as a pair.
+	dutchIJ = regexp.MustCompile(`(^|[\s])Ij`)
 )
 
 // Apply returns the address as it should be written, plus every change it made.
@@ -114,7 +118,12 @@ func collapseWhitespace(value string) string {
 	return strings.TrimSpace(whitespaceRun.ReplaceAllString(value, " "))
 }
 
+// titleCase capitalises the first letter of every word. It mirrors ff-model's
+// Address.normaliseAdresItems with one deliberate difference: ff-model lowercases
+// the J of the IJ digraph ("IJmuiden" becomes "Ijmuiden"), which is a spelling
+// mistake rather than a normalisation, and this package will not write one.
 func titleCase(value string) string {
 	lowered := strings.ToLower(value)
-	return wordStart.ReplaceAllStringFunc(lowered, strings.ToUpper)
+	titled := wordStart.ReplaceAllStringFunc(lowered, strings.ToUpper)
+	return dutchIJ.ReplaceAllString(titled, "${1}IJ")
 }
