@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"unicode"
 )
 
 // Finding is something wrong with a record that the rules may not fix by
@@ -18,8 +19,20 @@ const (
 	FindingZipcodeUnrecognised  = "zipcode-unrecognised"
 	FindingCoordinatesMissing   = "coordinates-missing"
 	FindingCoordinatesOutsideNL = "coordinates-outside-nl"
-	FindingCopiesDiffer         = "copies-differ"
+	FindingContactinfoDiffers   = "contactinfo-differs"
 	FindingContactIncomplete    = "contactinfo-incomplete"
+)
+
+// A finding is either a problem — something that has to be repaired before the
+// address is right — or a note: something worth seeing that may be perfectly
+// correct. The contact address is the reason the distinction exists. It is a
+// second address, not a copy of the first: the postal address for
+// correspondence may sit somewhere else entirely than the address people
+// visit, and calling that a defect would invite somebody to overwrite a
+// deliberate value with a wrong one.
+const (
+	KindProblem = "problem"
+	KindNote    = "note"
 )
 
 // The Netherlands with room to spare: anything outside this is either a foreign
@@ -40,9 +53,10 @@ type Record struct {
 	Longitude   string
 }
 
-// Finding is one problem, with enough detail to act on it.
+// Finding is one observation about a record, with enough detail to act on it.
 type Finding struct {
 	Code   string `json:"code"`
+	Kind   string `json:"kind"`
 	Detail string `json:"detail,omitempty"`
 }
 
@@ -52,7 +66,10 @@ type Finding struct {
 func Inspect(r Record) []Finding {
 	var findings []Finding
 	add := func(code, detail string) {
-		findings = append(findings, Finding{Code: code, Detail: detail})
+		findings = append(findings, Finding{Code: code, Kind: KindProblem, Detail: detail})
+	}
+	note := func(code, detail string) {
+		findings = append(findings, Finding{Code: code, Kind: KindNote, Detail: detail})
 	}
 
 	location, _ := Apply(r.Location)
@@ -82,10 +99,10 @@ func Inspect(r Record) []Finding {
 	if r.HasContact {
 		contact, _ := Apply(r.ContactInfo)
 		if missing := missingFields(contact); len(missing) > 0 {
-			add(FindingContactIncomplete, strings.Join(missing, ", "))
+			note(FindingContactIncomplete, strings.Join(missing, ", "))
 		}
 		if differing := differingFields(location, contact); len(differing) > 0 {
-			add(FindingCopiesDiffer, strings.Join(differing, ", "))
+			note(FindingContactinfoDiffers, strings.Join(differing, ", "))
 		}
 	}
 
@@ -133,26 +150,47 @@ func inspectCoordinates(r Record, dutch bool) []Finding {
 	return nil
 }
 
-// differingFields names the fields on which the two copies disagree. A field one
-// copy simply does not carry is incomplete rather than contradictory, and is
+// differingFields names what the two addresses disagree about. A field one of
+// them simply does not carry is incomplete rather than contradictory, and is
 // reported by missingFields instead.
+//
+// Street and house number are compared as one thing. Sources disagree about
+// where the boundary between them runs — "Cronjéstraat" + "15" against
+// "Cronjéstraat 15" + nothing is one address written two ways — and comparing
+// the fields separately turned that into a contradiction that was not there.
 func differingFields(location, contact Address) []string {
 	var differing []string
 	for _, f := range []struct {
 		name     string
 		lhs, rhs string
 	}{
-		{"street", location.Street, contact.Street},
-		{"housenr", location.HouseNr, contact.HouseNr},
+		{"street/housenr", location.Street + " " + location.HouseNr, contact.Street + " " + contact.HouseNr},
 		{"zipcode", location.ZipCode, contact.ZipCode},
 		{"city", location.City, contact.City},
 	} {
-		if f.lhs == "" || f.rhs == "" {
+		if strings.TrimSpace(f.lhs) == "" || strings.TrimSpace(f.rhs) == "" {
 			continue
 		}
-		if !strings.EqualFold(f.lhs, f.rhs) {
+		if !sameAddressText(f.lhs, f.rhs) {
 			differing = append(differing, f.name)
 		}
 	}
 	return differing
+}
+
+// sameAddressText compares two pieces of an address for what they say rather
+// than how they were typed: case, spacing and punctuation are the writer's, not
+// the address's.
+func sameAddressText(lhs, rhs string) bool {
+	return addressKey(lhs) == addressKey(rhs)
+}
+
+func addressKey(value string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(value) {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }

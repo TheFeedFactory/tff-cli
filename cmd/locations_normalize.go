@@ -44,11 +44,12 @@ type normalizeReport struct {
 	Selection     string           `json:"selection"`
 	Inspected     int              `json:"inspected"`
 	WouldChange   int              `json:"wouldChange"`
-	WithFindings  int              `json:"withFindings"`
-	NeedsAPerson  int              `json:"needsAPerson"`
+	WithProblems  int              `json:"withProblems"`
+	WithNotes     int              `json:"withNotes"`
 	Clean         int              `json:"clean"`
 	ChangesByRule map[string]int   `json:"changesByRule"`
-	FindingCounts map[string]int   `json:"findingCounts"`
+	ProblemCounts map[string]int   `json:"problemCounts"`
+	NoteCounts    map[string]int   `json:"noteCounts"`
 	NotIdempotent []string         `json:"notIdempotent,omitempty"`
 	Locations     []locationReport `json:"locations,omitempty"`
 }
@@ -81,7 +82,8 @@ func (c *LocationsNormalizeCmd) Run(client *api.Client) error {
 		DryRun:        true,
 		Selection:     describeSelection(c),
 		ChangesByRule: map[string]int{},
-		FindingCounts: map[string]int{},
+		ProblemCounts: map[string]int{},
+		NoteCounts:    map[string]int{},
 	}
 
 	err := eachLocation(client.ListLocations, opts, c.Limit, func(r api.Resource) {
@@ -91,19 +93,27 @@ func (c *LocationsNormalizeCmd) Run(client *api.Client) error {
 		for _, ch := range entry.Changes {
 			report.ChangesByRule[ch.Rule]++
 		}
+		problems, notes := 0, 0
 		for _, f := range entry.Findings {
-			report.FindingCounts[f.Code]++
+			if f.Kind == normalize.KindNote {
+				report.NoteCounts[f.Code]++
+				notes++
+				continue
+			}
+			report.ProblemCounts[f.Code]++
+			problems++
 		}
 		if len(entry.Changes) > 0 {
 			report.WouldChange++
 		}
-		if len(entry.Findings) > 0 {
-			report.WithFindings++
+		if problems > 0 {
+			report.WithProblems++
 		}
-		if needsAPerson(entry.Findings) {
-			report.NeedsAPerson++
+		if notes > 0 {
+			report.WithNotes++
 		}
-		if len(entry.Changes) == 0 && len(entry.Findings) == 0 {
+		// A note may be perfectly correct, so it does not make a record dirty.
+		if len(entry.Changes) == 0 && problems == 0 {
 			report.Clean++
 		}
 
@@ -180,19 +190,6 @@ func isSettled(r api.Resource) bool {
 func contactAddress(ci *api.ContactInfo) normalize.Address {
 	a, _ := contactAddressOf(ci)
 	return a
-}
-
-// needsAPerson reports whether a finding is a hole in the address rather than an
-// observation about it. A hole cannot be filled by any rule in this package.
-func needsAPerson(findings []normalize.Finding) bool {
-	for _, f := range findings {
-		switch f.Code {
-		case normalize.FindingStreetMissing, normalize.FindingHouseNrMissing,
-			normalize.FindingZipcodeMissing, normalize.FindingCityMissing:
-			return true
-		}
-	}
-	return false
 }
 
 func prefixed(copyName string, changes []normalize.Change) []normalize.Change {
@@ -299,11 +296,13 @@ func printReport(report normalizeReport, details bool) {
 	fmt.Printf("Dry run over %s — nothing is written.\n\n", report.Selection)
 	fmt.Printf("Inspected            %d locations\n", report.Inspected)
 	fmt.Printf("Would be rewritten   %d  (deterministic, safe to apply)\n", report.WouldChange)
-	fmt.Printf("Has findings         %d  (of which %d are missing an address part)\n", report.WithFindings, report.NeedsAPerson)
+	fmt.Printf("Has a problem        %d  (an address part is missing or unreadable)\n", report.WithProblems)
+	fmt.Printf("Has a note           %d  (worth seeing, may be perfectly correct)\n", report.WithNotes)
 	fmt.Printf("Already clean        %d\n", report.Clean)
 
 	printCounts("\nProposed changes, counted per rewritten value (safe to write)", report.ChangesByRule)
-	printCounts("\nFindings, counted per location (these need a lookup or a person)", report.FindingCounts)
+	printCounts("\nProblems, counted per location (these need a lookup or a person)", report.ProblemCounts)
+	printCounts("\nNotes, counted per location (nothing here is necessarily wrong)", report.NoteCounts)
 
 	if len(report.NotIdempotent) > 0 {
 		fmt.Printf("\nWARNING: %d locations do not settle after one pass: %s\n",

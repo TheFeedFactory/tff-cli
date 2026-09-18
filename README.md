@@ -149,14 +149,26 @@ It reports **changes** — deterministic rewrites of values that are already the
 | `zipcode-format` | `8075re` → `8075 RE` |
 | `city-case` | `HAARLEM` → `Haarlem`, but only when the name carries no capitalisation of its own |
 
-and **findings** — what the rules may not repair, because filling them in would mean
+**problems** — what the rules may not repair, because filling them in would mean
 guessing: `street-missing`, `housenr-missing`, `zipcode-missing`, `city-missing`,
-`zipcode-unrecognised`, `coordinates-missing`, `coordinates-outside-nl`, and
-`copies-differ` (the address under `location` and the one under `contactinfo` disagree
-after both have been normalised).
+`zipcode-unrecognised`, `coordinates-missing`, `coordinates-outside-nl`
 
-Both copies of the address are inspected, and each proposed change names the copy it
-belongs to, because anything that later writes these values has to write them twice.
+and **notes** — worth seeing, but very possibly correct: `contactinfo-differs`,
+`contactinfo-incomplete`.
+
+The distinction matters most for the contact address. `contactinfo.address` is a
+**second address, not a copy of the first**: the postal address for correspondence may
+sit somewhere else entirely than the address people visit — a park office, a VVV's own
+office, the office of a ferry operator. Reporting that as a defect would invite somebody
+to overwrite a deliberate value with a wrong one, so it is a note and never a problem.
+
+Street and house number are compared as one thing, because sources disagree about where
+the boundary between them runs: `Cronjéstraat` + `15` and `Cronjéstraat 15` + nothing
+are one address written two ways, and comparing the fields separately turned that into a
+contradiction that was not there.
+
+Both addresses are inspected, and each proposed change names the one it belongs to,
+because anything that later writes these values has to write them in two places.
 
 `zipcode-format` and `city-case` deliberately mirror `Address.normaliseAdresItems` in
 ff-model, so that a pass that writes these values back cannot disagree with the model's

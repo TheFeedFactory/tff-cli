@@ -62,15 +62,53 @@ func TestReportsCoordinatesThatAreMissingOrNotInTheNetherlands(t *testing.T) {
 	}
 }
 
-func TestReportsTheTwoAddressCopiesDisagreeing(t *testing.T) {
+func TestReportsADifferentContactAddressAsANoteRatherThanAProblem(t *testing.T) {
+	// A postal address for correspondence may sit somewhere else entirely than
+	// the address people visit — a park office, a VVV's own office, the office
+	// of a ferry operator. Two different addresses is the normal case, not a
+	// defect, so it is reported without asking anybody to repair it.
 	got := Inspect(Record{
-		Location:    Address{Street: "Felualaan", HouseNr: "29", ZipCode: "7313 GM", City: "Apeldoorn"},
-		ContactInfo: Address{Street: "Hoofdstraat", HouseNr: "1", ZipCode: "7311 KA", City: "Apeldoorn"},
+		Location:    Address{Street: "Apeldoornseweg", HouseNr: "258", ZipCode: "6751 TA", City: "Hoenderloo"},
+		ContactInfo: Address{Street: "Houtkampweg", HouseNr: "9", ZipCode: "6731 AV", City: "Otterlo"},
 		HasContact:  true,
 	})
 
-	if !strings.Contains(findingCodes(got), FindingCopiesDiffer) {
-		t.Errorf("codes = %q, want %s", findingCodes(got), FindingCopiesDiffer)
+	var note *Finding
+	for i := range got {
+		if got[i].Code == FindingContactinfoDiffers {
+			note = &got[i]
+		}
+	}
+	if note == nil {
+		t.Fatalf("codes = %q, want %s", findingCodes(got), FindingContactinfoDiffers)
+	}
+	if note.Kind != KindNote {
+		t.Errorf("kind = %q, want %q", note.Kind, KindNote)
+	}
+}
+
+func TestDoesNotCallADifferentlySplitAddressADifference(t *testing.T) {
+	// The same address, with the house number inside the street on one side.
+	// Comparing field by field made this look like two addresses; it is one.
+	got := Inspect(Record{
+		Location:    Address{Street: "Cronjéstraat", HouseNr: "15", ZipCode: "6814 AG", City: "Arnhem"},
+		ContactInfo: Address{Street: "Cronjéstraat 15", ZipCode: "6814 AG", City: "Arnhem"},
+		HasContact:  true,
+		Latitude:    "51.99", Longitude: "5.89",
+	})
+
+	if strings.Contains(findingCodes(got), FindingContactinfoDiffers) {
+		t.Errorf("codes = %q, want no %s", findingCodes(got), FindingContactinfoDiffers)
+	}
+}
+
+func TestMissingAddressPartsStayProblems(t *testing.T) {
+	got := Inspect(Record{Location: Address{City: "Ede"}})
+
+	for _, f := range got {
+		if f.Code == FindingStreetMissing && f.Kind != KindProblem {
+			t.Errorf("%s has kind %q, want %q", f.Code, f.Kind, KindProblem)
+		}
 	}
 }
 
@@ -83,30 +121,32 @@ func TestDoesNotCallWhitespaceADisagreement(t *testing.T) {
 		HasContact:  true,
 	})
 
-	if strings.Contains(findingCodes(got), FindingCopiesDiffer) {
-		t.Errorf("codes = %q, want no %s", findingCodes(got), FindingCopiesDiffer)
+	if strings.Contains(findingCodes(got), FindingContactinfoDiffers) {
+		t.Errorf("codes = %q, want no %s", findingCodes(got), FindingContactinfoDiffers)
 	}
 }
 
-func TestSaysWhichFieldsDisagree(t *testing.T) {
+func TestSaysWhatDiffersBetweenTheTwoAddresses(t *testing.T) {
+	// Street and house number are compared as one thing, so the detail names
+	// that unit rather than pretending the two fields drifted apart separately.
 	got := Inspect(Record{
-		Location:    Address{Street: "Felualaan", HouseNr: "29", ZipCode: "7313 GM", City: "Apeldoorn"},
-		ContactInfo: Address{Street: "Felualaan", HouseNr: "31", ZipCode: "7313 GM", City: "Apeldoorn"},
+		Location:    Address{Street: "J.C. Wilslaan", HouseNr: "29", ZipCode: "7313 HK", City: "Apeldoorn"},
+		ContactInfo: Address{Street: "J.C. Wilslaan", HouseNr: "21", ZipCode: "7313 HK", City: "Apeldoorn"},
 		HasContact:  true,
 	})
 
 	for _, f := range got {
-		if f.Code == FindingCopiesDiffer {
-			if !strings.Contains(f.Detail, "housenr") {
-				t.Errorf("detail = %q, want it to name housenr", f.Detail)
+		if f.Code == FindingContactinfoDiffers {
+			if !strings.Contains(f.Detail, "street/housenr") {
+				t.Errorf("detail = %q, want it to name street/housenr", f.Detail)
 			}
-			if strings.Contains(f.Detail, "street") {
-				t.Errorf("detail = %q, should not name street", f.Detail)
+			if strings.Contains(f.Detail, "city") {
+				t.Errorf("detail = %q, should not name city", f.Detail)
 			}
 			return
 		}
 	}
-	t.Fatalf("no %s finding in %q", FindingCopiesDiffer, findingCodes(got))
+	t.Fatalf("no %s finding in %q", FindingContactinfoDiffers, findingCodes(got))
 }
 
 func TestDoesNotJudgeAForeignAddressByDutchRules(t *testing.T) {
