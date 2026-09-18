@@ -244,6 +244,16 @@ type Address struct {
 	Country    string  `json:"country,omitempty"`
 	Latitude   float64 `json:"latitude,omitempty"`
 	Longitude  float64 `json:"longitude,omitempty"`
+
+	// The API carries the position here, as strings, not in Latitude/Longitude.
+	GisCoordinates []GisCoordinate `json:"gisCoordinates,omitempty"`
+}
+
+// GisCoordinate is one WGS84 position: x is the longitude, y the latitude.
+type GisCoordinate struct {
+	XCoordinate string `json:"xcoordinate,omitempty"`
+	YCoordinate string `json:"ycoordinate,omitempty"`
+	Label       string `json:"label,omitempty"`
 }
 
 type Physical struct {
@@ -257,6 +267,10 @@ type ContactInfo struct {
 	// Simple fields (may be string or object)
 	Phone json.RawMessage `json:"phone,omitempty"`
 	Mail  json.RawMessage `json:"mail,omitempty"`
+
+	// The postal address as contact information, which is a second copy of the
+	// one under Location and is regularly not the same.
+	Address *Address `json:"address,omitempty"`
 
 	// Array fields
 	Phones    []ContactPhone `json:"phones,omitempty"`
