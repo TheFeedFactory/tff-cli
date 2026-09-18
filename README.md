@@ -115,6 +115,57 @@ Each resource type supports these subcommands:
 | `comment <id> <msg>` | Add a comment to a resource |
 | `revisions <id>` | Show revision history |
 
+Locations have one more:
+
+| Subcommand | Description |
+|------------|-------------|
+| `normalize` | Dry run: report how a selection's addresses would be normalised, and what is missing from them |
+
+### Address normalisation (dry run)
+
+`tff locations normalize` walks a selection and answers two questions: what can be
+cleaned up without asking anybody, and what cannot. **It writes nothing.** There is no
+`--apply`, on purpose — the point is to see the size and shape of the work before
+anything is changed.
+
+```bash
+# The published Visit Veluwe locations
+tff locations normalize --markers toonopveluwe --published true --userorganisation '*'
+
+# A worklist for the redactie, one row per proposed change
+tff locations normalize --markers toonopveluwe --published true --csv worklist.csv
+
+# Every affected location instead of a few examples per rule
+tff locations normalize --markers toonopveluwe --details
+```
+
+It reports **changes** — deterministic rewrites of values that are already there:
+
+| Rule | What it does |
+|------|--------------|
+| `whitespace` | Trims and collapses runs of spaces in every address field |
+| `housenr-null` | Removes a house number that is literally the string `null` |
+| `housenr-suffix` | Folds a single trailing letter onto the number: `41a` → `41A`. A range like `17-19` is left alone |
+| `zipcode-format` | `8075re` → `8075 RE` |
+| `city-case` | `HAARLEM` → `Haarlem`, but only when the name carries no capitalisation of its own |
+
+and **findings** — what the rules may not repair, because filling them in would mean
+guessing: `street-missing`, `housenr-missing`, `zipcode-missing`, `city-missing`,
+`zipcode-unrecognised`, `coordinates-missing`, `coordinates-outside-nl`, and
+`copies-differ` (the address under `location` and the one under `contactinfo` disagree
+after both have been normalised).
+
+Both copies of the address are inspected, and each proposed change names the copy it
+belongs to, because anything that later writes these values has to write them twice.
+
+`zipcode-format` and `city-case` deliberately mirror `Address.normaliseAdresItems` in
+ff-model, so that a pass that writes these values back cannot disagree with the model's
+own normalisation.
+
+Note that `--userorganisation '*'` widens the selection beyond your token's own
+organisation, which for a shared catalogue is usually what you want: the same Visit
+Veluwe selection is 570 locations without it and 647 with it.
+
 ### Dictionary Commands
 
 ```bash

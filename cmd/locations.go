@@ -20,6 +20,7 @@ type LocationsCmd struct {
 	Comments  LocationsCommentsCmd  `cmd:"" help:"List all comments on a location."`
 	Comment   LocationsCommentCmd   `cmd:"" help:"Add a comment to a location."`
 	Revisions LocationsRevisionsCmd `cmd:"" help:"Show the revision history of a location."`
+	Normalize LocationsNormalizeCmd `cmd:"" help:"Dry run: report how the addresses of a selection of locations would be normalised, and what is missing from them. Reads only; writes nothing."`
 }
 
 type LocationsListCmd struct {
